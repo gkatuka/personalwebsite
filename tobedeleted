@@ -1,0 +1,530 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Feb 15 16:36:26 2021
+
+@author: njshah2
+@co-author: gkatuka
+"""
+
+import requests
+from requests_kerberos import HTTPKerberosAuth
+from bs4 import BeautifulSoup
+import sys
+import urllib3
+
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+# this is to ignore the ssl insecure warning as we are passing in 'verify=false'
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+### Hardcoded os lists
+project_os_dict = {
+    'Columbia Park SW2':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04','UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0'],
+    'Columbia Park SW3':['Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x'],
+    'Columbia Park SW4':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04,UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0','WinPE 6.0 (2016 PE)','Windows Server 2016','Windows Server 2016 Core','Windows Server 2016 Hyper-V','Windows Server 2019','Windows Server 2019 (20H1) Core','Windows Server 2019 Core'],
+    'Columbia Park SW5':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04,UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0','WinPE 6.0 (2016 PE)','Windows Server 2016','Windows Server 2016 Core','Windows Server 2016 Hyper-V','Windows Server 2019','Windows Server 2019 (20H1) Core','Windows Server 2019 Core'],
+    'Columbia Park SW6':['Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x']
+}
+
+project_device_list = {
+     'Columbia Park SW2': [22011670657,22011670648,22011670646,22011670653,22011670662,22011670660,22011670644,22011670642,22011670651],
+     'Columbia Park SW3': [22011670666],
+     'Columbia Park SW4': [22011670630,22011670635,22011670620,22011670632,22011670633],
+     'Columbia Park SW5': [22011670618,22011670622,22011670624,22011670626,22011670628],
+     'Columbia Park SW6': [22011670639],
+    }
+
+def get_OS_from_HSD_JSON(HSD_no):
+    data = get_HSD_JSON(HSD_no)
+    element = data['data'][0]
+    os_string = element['server_platf_lan.feature.os_affected']
+    if not os_string :
+        return []
+    return os_string.split(',')
+
+def build_hsd_get_url(HSD_no):
+    return 'https://hsdes-api.intel.com/rest/article/' + str(HSD_no)
+
+
+def build_hsd_link_url(HSD_no):
+    return (build_hsd_get_url(HSD_no)+'/links')
+
+def get_HSD_JSON (HSD_no):
+    headers = { 'Content-type': 'application/json' }
+    url = build_hsd_get_url(HSD_no)
+    return requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+
+def get_component_info (HSD_no):
+    data = get_HSD_JSON(HSD_no)
+    element = data['data'][0]
+    return element['']
+
+def get_summary_reason_for_change_from_HSD(HSD_no):
+
+    data = get_HSD_JSON(HSD_no)
+    element = data['data'][0]
+    return element['description'], element['server_platf_lan.feature.reason_for_change']
+
+def is_req(HSD_no):
+    data = get_HSD_JSON(HSD_no)
+    element = data['data'][0]
+    if element['feature.feature_type'] == 'change_request':
+        return 0
+    elif element['feature.feature_type'] == 'requirement':
+        return 1
+    else:
+        print("something horrible happened")
+        sys.exit()
+ 
+
+def get_HSD_link_JSON(HSD_no):
+    headers = { 'Content-type': 'application/json' }
+    url = build_hsd_link_url(HSD_no)
+    return requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+
+def get_DCR_data_indirect(DCR_no):
+    soup = get_DCR_viewer_soup(DCR_no)
+    print("DCR Title:"+soup.find('title').text)
+    print("DCR lead: "+soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRLead_Value_ReadOnly").text)
+
+
+def get_DCR_data(DCR_no):
+
+    soup = get_DCR_details_soup(DCR_no)
+
+    #print(soup.text)
+    
+    print("DCR Title:"+soup.find("span", id="ctl00_PageTitle").text)
+    
+    print("DCR lead: "+soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRLead_Value_ReadOnly").text)
+    
+    target_project = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_TargetProjectURL").text
+    HSD_link = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DocumentLink_Value_HyperLink").text
+    status = soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRState_Value_ReadOnly").text
+    if (HSD_link.find('jama') != -1):
+        HSD_link = get_HSD_link_from_DCR_viewer(DCR_no)
+
+    print("Target project: "+target_project)
+    print("Status: "+status)
+
+    HSD_no= int(HSD_link.split("/")[-1])
+    return target_project, HSD_no, status
+
+def add_OS_list_HSD(HSD_no, affected_os):    
+    existing_os_arr = get_OS_from_HSD_JSON(HSD_no)
+    os_string = ",".join(affected_os)
+    new_os_found = False
+    
+    for os in affected_os:
+        if (os not in existing_os_arr):
+            new_os_found = True
+            existing_os_arr.append(os)
+    
+    if new_os_found == False:
+        print ("All the OSes already exist in HSD")
+        return 1
+    
+    final_os_string =','.join(existing_os_arr)
+    print("Adding OSes "+final_os_string)
+    
+    headers = { 'Content-type': 'application/json' }
+ 
+    url = build_hsd_get_url(HSD_no)
+    code = 0
+    affected_os_string='"server_platf_lan.feature.os_affected": "'+os_string+'"'
+    payload = """
+    {
+      "tenant": "server_platf_lan",
+      "subject": "feature",
+      "fieldValues": [
+        {
+          """+affected_os_string+"""
+        },
+        {
+          "send_mail": "false"
+        }
+     
+      ]
+    }
+    """
+    response = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)    
+      
+    print ("Affected_OS added"+str(response.status_code))
+    if (response.status_code == 200):
+        code = 1
+    
+    return code
+
+def get_device_list(HSD_no):
+    resp = get_HSD_link_JSON(HSD_no)
+    devices_HSD_array = []
+    for elem in resp['responses']:
+        if ((elem['relationship'] == 'child-parent') and (elem['subject'] == 'dyn_lookup')):
+            devices_HSD_array.append(int(elem['id']))
+    return devices_HSD_array
+
+def get_req_list(HSD_no):
+    resp = get_HSD_link_JSON(HSD_no)
+    req_HSD_array = []
+    for elem in resp['responses']:
+        if ((elem['relationship'] == 'parent-child') and (elem['subject'] == 'feature')
+            and is_req(int(elem['id'])) == 1):
+            req_HSD_array.append(int(elem['id']))
+    return req_HSD_array
+
+def add_requirements_list(HSD_no, req_list):
+    req_HSD_array = get_req_list(HSD_no)
+    
+    headers = { 'Content-type': 'application/json' }
+    first_elem = False;
+
+    child_id_list_string='"'
+    for element in req_list:
+        if element not in req_HSD_array:
+            if (first_elem):
+                child_id_list_string = child_id_list_string + ','
+            child_id_list_string = child_id_list_string + str(element)
+            first_elem = True
+    if(child_id_list_string == '"'):
+        print("All requirements already linked")
+        return
+    child_id_list_string = child_id_list_string + '"'
+    print("Adding requirements ", child_id_list_string)
+    parentID_string = '"'+str(HSD_no)+'"'
+      
+    url = 'https://hsdes-api.intel.com/rest/relation/add'
+    payload = """
+    {
+          "parentID": """+parentID_string+""",
+          "childIDList": """+child_id_list_string+""",
+          "linkType": "parent-child"
+    }
+    """
+    response = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    
+    if (response.status_code != 200):
+        print("Something went wrong")
+        sys.exit()
+    else:
+        print("Added req to the DCR", child_id_list_string)
+    
+    return
+
+def add_device_list(HSD_no, affected_devices):
+
+    devices_HSD_array = get_device_list(HSD_no)
+
+    child_id_list_string='"'
+    first_elem = False;
+    headers = { 'Content-type': 'application/json' }
+
+    for element in affected_devices:
+        if element not in devices_HSD_array:
+            if (first_elem):
+                child_id_list_string = child_id_list_string + ','
+            child_id_list_string = child_id_list_string + str(element)
+            first_elem = True
+    if(child_id_list_string == '"'):
+        print("All devices already linked")
+        return
+    
+    child_id_list_string = child_id_list_string + '"'
+    print("Add devices ", child_id_list_string)
+    
+    parentID_string = '"'+str(HSD_no)+'"'
+      
+    url = 'https://hsdes-api.intel.com/rest/relation/add'
+    payload = """
+    {
+          "parentID": """+parentID_string+""",
+          "childIDList": """+child_id_list_string+""",
+          "linkType": "child-parent"
+    }
+    """
+     
+    # Note the send_mail false. This will prevent HSD-ES from sending an email for this update.
+     
+    response = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    
+    if (response.status_code != 200):
+        print("Something went wrong")
+        sys.exit()
+    else:
+        print("Added links for devices", child_id_list_string)
+    
+    return
+    
+    
+def get_DCR_details_soup(DCR_no):
+    s = requests.session()
+    url = 'http://nova.amr.corp.intel.com/metrics/dcr/details.aspx?id=1&dcr='+str(DCR_no)
+    
+    #replacing sandbox url for testing 
+    # url = 'http://sand-box-1.amr.corp.intel.com/Metrics/DCR/Details.aspx?featureID=' +str(DCR_no)
+    r = s.get(url, verify=False, auth=HTTPKerberosAuth())
+    soup = BeautifulSoup(r.text, 'html.parser')
+    html_text = soup.text
+    if (html_text.find("An error has occurred") != -1):
+        print("trying again...")
+        r = s.get(url, verify=False, )
+
+    return BeautifulSoup(r.text, 'html.parser')
+
+def get_DCR_viewer_soup(DCR_no):
+    url = 'http://nova.amr.corp.intel.com/dcrlookup/startpage.aspx?DCR='+str(DCR_no)
+    
+    #replacing sandbox url for testing 
+    # url = 'http://sand-box-1.amr.corp.intel.com/dcrlookup/startpage.aspx?featureID=' +str(DCR_no)
+    r = requests.get(url, verify=False, auth=HTTPKerberosAuth())   
+    return BeautifulSoup(r.text, 'html.parser') 
+
+def get_HSD_link_from_DCR_viewer(DCR_no):
+    soup = get_DCR_viewer_soup(DCR_no)
+    mydiv = soup.find('div', id='MainContent_DCRContent')
+    mydivclass = mydiv.find('div',  {"class": "divRightCell"})
+    HSD_link = mydivclass.find('a')
+    return HSD_link.get('href')
+    
+
+def update_summary_roc_HSD(HSD_no, input_summary, input_roc):
+    headers = { 'Content-type': 'application/json' }
+
+    roc_string = description = '"'
+    input_summary = BeautifulSoup(input_summary, "lxml").text
+    input_roc = BeautifulSoup(input_roc, "lxml").text
+    roc_string = roc_string + input_roc + '"'
+    description = description + input_summary + '"'
+    
+    url = build_hsd_get_url(HSD_no)
+    
+    payload = """
+    {
+      "tenant": "server_platf_lan",
+      "subject": "feature",
+      "fieldValues": [
+        {
+          "description": """+description+"""
+        },
+        {
+          "send_mail": "false"
+        }
+     
+      ]
+    }
+    """
+    print(payload)
+    response = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    if (response.status_code == 200):
+        return 1
+    else:
+        print("Something went wrong here?")
+        sys.exit()
+        return 0
+
+def Autofill_HSD(project_os_list, project_dev_list, HSD_no):
+    
+    if (add_OS_list_HSD(HSD_no, project_os_list) != 1):
+        print("Something went wrong")
+        sys.exit()
+    
+    add_device_list(HSD_no, project_dev_list)
+    return
+
+def Duplicate_requirements(DCR_no, target_project, HSD_no):
+    DCR_no = int(input("Enter DCR # from which the requirements are to be duplicated: "))
+    if ((DCR_no < 3000) or (DCR_no > 4000)):
+        sys.exit()
+    target_project_old, HSD_no_old, status = get_DCR_data(DCR_no)
+    print("")
+    update = False
+    print("Would you also like copy the summary and reason for change")
+    if (int(input("Enter 1 if yes, any other key to skip")) == 1):
+        summary, roc = get_summary_reason_for_change_from_HSD(HSD_no)
+        old_summary, old_roc = get_summary_reason_for_change_from_HSD(HSD_no_old)
+        if 'TBD' in summary:
+            summary = old_summary
+            update = True
+        if 'TBD' in roc:
+            roc = old_roc
+            update = True
+        print("summary="+summary)
+        print("roc="+roc)
+        if update is True:
+            update_summary_roc_HSD(HSD_no, summary, roc)
+        
+    new_req_list = []
+    resp = get_HSD_link_JSON(HSD_no)
+    curr_HSD_req_array = []
+    curr_HSD_apx_array = []
+    for elem in resp['responses']:
+        if ((elem['relationship'] == 'parent-child') and (elem['subject'] == 'feature')):
+            curr_HSD_req_array.append(int(elem['id']))
+        if (elem['relationship'] == 'doc_tracking'):
+            curr_HSD_apx_array.append(int(elem['id']))
+    
+    resp = get_HSD_link_JSON(HSD_no_old)
+    old_HSD_req_array = []
+    old_HSD_apx_array = []
+    for elem in resp['responses']:
+        if ((elem['relationship'] == 'parent-child') and (elem['subject'] == 'feature')):
+            old_HSD_req_array.append(int(elem['id']))
+        if (elem['relationship'] == 'doc_tracking'):
+            old_HSD_apx_array.append(int(elem['id']))
+    new_req = False
+    for element in old_HSD_req_array:
+        #first check if the requirement is already in the new DCR
+        #if yes, assuming all the fields are correct continue to next
+        if element in curr_HSD_req_array:
+            continue
+        new_req = True
+        new_req_list.append(element)
+        print("Adding requirement ",element)
+        resp = get_HSD_link_JSON(HSD_no)
+
+        # Add a new requiremnt
+        # Autofil requirement HSD with OSes and link devices of the new target project
+        
+        #Autofill_HSD(get_OS_from_HSD_JSON(HSD_no), get_device_list(HSD_no), element)
+        print("Adding OS to requirements not supported at this stage")
+        add_device_list(HSD_no, project_device_list[target_project])
+
+   
+    if (new_req == True):
+        add_requirements_list(HSD_no, new_req_list)
+    if (new_req == False):
+        print("No new requirement Added")
+    else:
+        print("Requirements added successfully")   
+    return
+
+def Validate_DCR(DCR_no, target_project, HSD_no):
+    
+    return
+
+#Gloria's code for get DCR affected component 
+def get_DCR_affComp(DCR_no):
+    
+    soup = get_DCR_details_soup(DCR_no)
+
+    #print(soup.text)
+    
+    # print("DCR Affected Components table: "+soup.find('table', {'class': 'divRightCell'})
+    # os_affected_tbc = [] 
+    
+    # for items in soup.find('class'>'table').find_all('tr')[2:]:
+    #     data = items.find_all(['td','tr'])
+    #     try:
+    #         os_aff = data[3].text
+    #     except IndexError:pass
+    #     print(os_aff)
+    
+    
+    
+    # print("DCR lead: "+soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRLead_Value_ReadOnly").text)
+    
+    # target_project = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_TargetProjectURL").text
+    # HSD_link = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DocumentLink_Value_HyperLink").text
+    # status = soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRState_Value_ReadOnly").text
+    # if (HSD_link.find('jama') != -1):
+    #     HSD_link = get_HSD_link_from_DCR_viewer(DCR_no)
+
+    # print("Target project: "+target_project)
+    # print("Status: "+status)
+
+    # HSD_no= int(HSD_link.split("/")[-1])
+    # return target_project, HSD_no, status
+    print("DCR component added to DCR affected component list to-be-cloned")
+
+
+
+#Gloria's code for cloning DCR
+def Clone_DCR(DCR_no, target_project, HSD_no):
+    DCR_no = int(input("Enter DCR # from which the affected components are to be cloned: "))
+    if ((DCR_no < 3000) or (DCR_no > 4000)):
+        sys.exit()
+    
+    target_project_old, HSD_no_old, status = get_DCR_data(DCR_no)
+    dcr_affComp_tbc = []
+    #get dcr affected components - add to dcr_affComp_tbc
+    dcr_affComp_tbc.append(get_DCR_affComp(DCR_no))
+    print(dcr_affComp_tbc)
+    
+    
+    print("")
+   # update = False
+    
+    #create list for affected components across multiple DCRs
+    
+    #add code to clone the affected os component
+    
+    print("Would you also like clone these os components")
+    if (int(input("Enter 1 if yes, any other key to skip")) == 1):
+        #clone the affected components for th DCR and add to a list
+        #recursion until entry is not 1
+        
+        #Clone_DCR(DCR_no, target_project, HSD_no)
+        print("Cloning DCR")
+        #print("Cloning DCR" + DCR_no)
+
+def main():
+    
+    print("Welcome to the DCR parser")
+
+    DCR_no=0
+    
+    DCR_no = int(input("Enter the DCR #: "))
+    if ((DCR_no < 3000) or (DCR_no > 4000)):
+        sys.exit()
+        
+    print("..........................")
+    
+    target_project, HSD_no, status = get_DCR_data(DCR_no)
+
+    if "approved" in status.lower():
+        print(bcolors.WARNING +"ERROR:"+ bcolors.ENDC)
+        print("DCR Parser tool cannot be used for Approved DCRs")
+        sys.exit()
+        
+    print("This tool is recommended for DCR leads to use on their \033[4mOWN\033[0m DCRs or for \033[4mDCR APPROVAL\033[0m")
+    print("..........................")
+    if (int(input("If you are a DCR lead press 1 to continue ")) != 1):
+        print("THANK YOU for using DCR Parser!!!")
+        sys.exit()
+        
+        
+    while(1):
+        print("What would like to do")
+        print("1. Autofill supported OSes and device based on target project")
+        print("2. Duplicate requirements from another DCR")
+        print("3. Syntax check on the DCR for approval")
+        print("4. Clone the Affected Component")
+        print("5. Exit")
+        
+        ip = int(input("Please select from above options: "))
+        
+        if (ip == 1):
+            Autofill_HSD(project_os_dict[target_project], project_device_list[target_project], HSD_no)
+        elif (ip == 2):
+            Duplicate_requirements(DCR_no,target_project, HSD_no)
+        elif (ip == 3):
+            Validate_DCR(DCR_no, target_project, HSD_no)
+        elif (ip == 4):
+            print("cloning DCR...")
+            Clone_DCR(DCR_no, target_project, HSD_no)
+        else:
+            sys.exit()
+            
+
+    
+if __name__ == "__main__":
+    main()
