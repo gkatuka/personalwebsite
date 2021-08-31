@@ -3,15 +3,21 @@
 Created on Tue Feb 15 16:36:26 2021
 
 @author: njshah2
-@co-author: gkatuka
+@co-author: gkatuka, bmikailenko
 """
 
 import requests
 from requests_kerberos import HTTPKerberosAuth
 from bs4 import BeautifulSoup
 import sys
+import json
+# import pandas
 import urllib3
-
+from selenium import webdriver
+from selenium.webdriver.support.ui import Select
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait 
+from selenium.webdriver.support import expected_conditions as EC
 
 class bcolors:
     HEADER = '\033[95m'
@@ -27,23 +33,39 @@ class bcolors:
 # this is to ignore the ssl insecure warning as we are passing in 'verify=false'
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-### Hardcoded os lists
+# the list of OS for each traget project 
 project_os_dict = {
     'Columbia Park SW2':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04','UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0'],
     'Columbia Park SW3':['Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x'],
     'Columbia Park SW4':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04,UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0','WinPE 6.0 (2016 PE)','Windows Server 2016','Windows Server 2016 Core','Windows Server 2016 Hyper-V','Windows Server 2019','Windows Server 2019 (20H1) Core','Windows Server 2019 Core'],
     'Columbia Park SW5':['FreeBSD 12.2','FreeBSD 13.0','Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP2','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04,UEFI 2.3','UEFI 2.4','UEFI 2.6','UEFI 2.7','VMware ESXi 7.0','WinPE 6.0 (2016 PE)','Windows Server 2016','Windows Server 2016 Core','Windows Server 2016 Hyper-V','Windows Server 2019','Windows Server 2019 (20H1) Core','Windows Server 2019 Core'],
     'Columbia Park SW6':['Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x']
-}
+    }
 
+#list of HSD_no for traget project to duplicate device list
 project_device_list = {
      'Columbia Park SW2': [22011670657,22011670648,22011670646,22011670653,22011670662,22011670660,22011670644,22011670642,22011670651],
      'Columbia Park SW3': [22011670666],
      'Columbia Park SW4': [22011670630,22011670635,22011670620,22011670632,22011670633],
      'Columbia Park SW5': [22011670618,22011670622,22011670624,22011670626,22011670628],
      'Columbia Park SW6': [22011670639],
+     }
+#list of os affected to match with affected components
+os_affected_dict = {
+    'ESX': ['VMware ESXi 7.0'],
+    'FreeBSD': ['FreeBSD 12.2','FreeBSD 13.0'],
+    'Linux' : ['Linux RHEL 7.9','Linux RHEL 8.4','Linux SLES 12 SP5','Linux SLES 15 SP3','Linux Stable Kernel version 4.x','Linux Stable Kernel version 5.x','Linux Ubuntu 18.04','Linux Ubuntu 20.04'],
+    'NDIS' : ['WinPE 6.0 (2016 PE)','Windows Server 2016','Windows Server 2016 Core','Windows Server 2016 Hyper-V','Windows Server 2019','Windows Server 2019 (20H1) Core','Windows Server 2019 Core','Windows Server 2022','Windows Server 2022 Core','Windows Server 2022 Hyper-V']
     }
 
+#list of all components and OSes
+with open("Component_OS_List.json") as f:
+    component_os_list = json.load(f)
+
+# uncomment to view the list of all components and their corresponding OSes
+# print(component_os_list)
+
+#gets the list of os_affected from HSDes
 def get_OS_from_HSD_JSON(HSD_no):
     data = get_HSD_JSON(HSD_no)
     element = data['data'][0]
@@ -52,29 +74,38 @@ def get_OS_from_HSD_JSON(HSD_no):
         return []
     return os_string.split(',')
 
+#build the hsd link for a DCR given a HSD_no 
 def build_hsd_get_url(HSD_no):
     return 'https://hsdes-api.intel.com/rest/article/' + str(HSD_no)
 
-
+#add /links to the hsd-es url
 def build_hsd_link_url(HSD_no):
     return (build_hsd_get_url(HSD_no)+'/links')
 
+#returns a json format for data from hsd   
 def get_HSD_JSON (HSD_no):
     headers = { 'Content-type': 'application/json' }
     url = build_hsd_get_url(HSD_no)
-    return requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+    try:
+        r = requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+    return r
 
+#get component info from hsd-es 
 def get_component_info (HSD_no):
     data = get_HSD_JSON(HSD_no)
     element = data['data'][0]
     return element['']
 
+#get summary of change --> "description" from hsd-es
 def get_summary_reason_for_change_from_HSD(HSD_no):
-
     data = get_HSD_JSON(HSD_no)
     element = data['data'][0]
     return element['description'], element['server_platf_lan.feature.reason_for_change']
 
+#check if a feature type is "requirement" or a "change_request"
 def is_req(HSD_no):
     data = get_HSD_JSON(HSD_no)
     element = data['data'][0]
@@ -86,23 +117,28 @@ def is_req(HSD_no):
         print("something horrible happened")
         sys.exit()
  
-
+#returns a json format for data from hsd-es
 def get_HSD_link_JSON(HSD_no):
     headers = { 'Content-type': 'application/json' }
     url = build_hsd_link_url(HSD_no)
-    return requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+    try:
+        r = requests.get(url, verify=False, auth=HTTPKerberosAuth(), headers = headers).json()
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+    return r
 
+#get DCR data from the DCr viewer
 def get_DCR_data_indirect(DCR_no):
     soup = get_DCR_viewer_soup(DCR_no)
     print("DCR Title:"+soup.find('title').text)
     print("DCR lead: "+soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRLead_Value_ReadOnly").text)
 
-
+#get the DCR data from the DCR details 
 def get_DCR_data(DCR_no):
-
     soup = get_DCR_details_soup(DCR_no)
 
-    #print(soup.text)
+    # print(soup.text)
     
     print("DCR Title:"+soup.find("span", id="ctl00_PageTitle").text)
     
@@ -120,51 +156,209 @@ def get_DCR_data(DCR_no):
     HSD_no= int(HSD_link.split("/")[-1])
     return target_project, HSD_no, status
 
-def add_OS_list_HSD(HSD_no, affected_os):    
-    existing_os_arr = get_OS_from_HSD_JSON(HSD_no)
-    os_string = ",".join(affected_os)
-    new_os_found = False
+# Function returns the minimum set of affected component list "a" 
+#   and target project affected OS "b"
+#
+#   TODO: Finish the minimum set implementation
+#
+def minimum_set(a, b):
+    min_set = []
     
-    for os in affected_os:
-        if (os not in existing_os_arr):
-            new_os_found = True
-            existing_os_arr.append(os)
+    if ('Linux Stable Kernel 5.x' in a) and ('Linux Stable Kernel version 5.x' in b):
+        min_set.append('Linux Stable Kernel version 5.x')
+        
+        # There is a Linux Stable Kernel 4.14-5.x. What to do? @here
     
-    if new_os_found == False:
-        print ("All the OSes already exist in HSD")
+    if ('Linux Stable Kernel 4.x/5.x' in a) and ('Linux Stable Kernel version 4.x' in b):
+        min_set.append('Linux Stable Kernel version 4.x')
+        
+    if ('Linux Stable Kernel 4.x/5.x' in a) and ('Linux Stable Kernel version 5.x' in b):
+        min_set.append('Linux Stable Kernel version 5.x')
+        
+    if ('Linux Stable Kernel 3.x/4.x/5.x' in a) and ('Linux Stable Kernel version 4.x' in b):
+        min_set.append('Linux Stable Kernel version 4.x')
+        
+    if ('Linux Stable Kernel 3.x/4.x/5.x' in a) and ('Linux Stable Kernel version 5.x' in b):
+        min_set.append('Linux Stable Kernel version 5.x')
+        
+    return list(dict.fromkeys(min_set))
+
+# Function returns the minimum set of the DCR's requirements affected OS
+#   and target project affected OS
+def get_DCR_affected_os(HSD_no, project_os_list):  
+    
+    # list of affected components
+    affected_component_list = []
+        
+    # list of affected OSes
+    affected_os_list = []
+    
+    # get a list of the DCR's requirements HSD numbers
+    hsd_req_list = get_req_list(HSD_no)
+    
+    # for each requirement, get its respected component
+    for req in hsd_req_list:
+        affected_component = get_req_affected_component(req)
+        affected_component_list.append(affected_component)
+        
+    # ERROR: No components or requirements for the DCR
+    if affected_component_list == []:
+        print("ERROR: Cannot Autofill supported OSes - no affected components or no requirements \n")
         return 1
     
-    final_os_string =','.join(existing_os_arr)
-    print("Adding OSes "+final_os_string)
+    # for each component, get corresponding affected OS from dictionary
+    for affected_component in affected_component_list:
+        
+        # remove "sw." and replace "_" with "." to match 
+        #   affected_component format with keys in dict.
+        if (affected_component[0:3] == "sw."):
+            affected_component = affected_component[3:]
+        affected_component = affected_component.replace("_",".")
+        
+        # if component is an exact match to a key in the dict
+        if affected_component in component_os_list:
+            affected_os_list.append(component_os_list[affected_component])
+            
+        else:
+            # get a the list of near matches
+            affected_os_near_matches = [value for key, value in component_os_list.items() if affected_component in key.lower()]
+            
+            # if component is a near match with keys in the dict
+            if (len(affected_os_near_matches) >= 1):
+                for matches in affected_os_near_matches:
+                    affected_os_list.append(matches)
+            
+            # component has no matches
+            else:
+                print("ERROR: Something went wrong with " + str(affected_component) + " in get_affected_os_list_HSD()")
+                return 1
     
-    headers = { 'Content-type': 'application/json' }
- 
-    url = build_hsd_get_url(HSD_no)
-    code = 0
-    affected_os_string='"server_platf_lan.feature.os_affected": "'+os_string+'"'
-    payload = """
-    {
-      "tenant": "server_platf_lan",
-      "subject": "feature",
-      "fieldValues": [
-        {
-          """+affected_os_string+"""
-        },
-        {
-          "send_mail": "false"
-        }
-     
-      ]
-    }
-    """
-    response = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)    
-      
-    print ("Affected_OS added"+str(response.status_code))
-    if (response.status_code == 200):
-        code = 1
+    # get the flattened list ([[],[],[]] --> []) without duplicates
+    affected_os_list = list(dict.fromkeys([item for sublist in affected_os_list for item in sublist]))
     
-    return code
+    # return the minimum set of the affected_OSes and target project OSes
+    return minimum_set(affected_os_list, project_os_list)
 
+
+# Function gets a list of affected os given the 
+#   HSD number of a requirement "req" and the target project OS list
+def get_req_affected_os(req, project_os_list):
+                
+    # List of requirements new affected OS
+    affected_os = []
+        
+    # get the requirements affected component
+    affected_component = get_req_affected_component(req)
+        
+    print("-- get_req_affected_os --")
+    print("affected component: " + str(affected_component))
+    
+    #
+    # Searching component_os_list for affected_component key
+    #   
+    #
+    # remove "sw." and replace "_" with "." to match 
+    #   affected_component format with keys in dict.
+    if (affected_component[0:3] == "sw."):
+        affected_component = affected_component[3:]
+    affected_component = affected_component.replace("_",".")
+    
+    # if affected component is an exact match to a key in the dict
+    if affected_component in component_os_list:
+        affected_os.append(component_os_list[affected_component])
+        
+    else:
+        # get a the list of near matches
+        affected_os_near_matches = [value for key, value in component_os_list.items() if affected_component in key.lower()]
+        
+        # if component is a near match with keys in the dict
+        if (len(affected_os_near_matches) >= 1):
+            for matches in affected_os_near_matches:
+                affected_os.append(matches)
+            
+        # component has no matches
+        else:
+            print("ERROR: Component " + str(affected_component) + " in requirement " + str(req) + " has no matching affected OS")
+            return -1
+        
+    # get the flattened list ([[],[],[]] --> []) without duplicates
+    
+    affected_os = list(dict.fromkeys([item for sublist in affected_os for item in sublist]))
+        
+    print("affected os")
+    print(affected_os)
+    print("project os list")
+    print(project_os_list)
+    print("minimum set")
+    print(minimum_set(affected_os, project_os_list))
+    print("-----------")
+
+    # find the minimum set of affected os and terget project affected os
+    return minimum_set(affected_os, project_os_list)
+ 
+#Commenting out because replacing with a function to pull the components list from DCR details page
+#This function pulls the components list from HSD-es 
+           
+# def update_os(HSD_no, affected_os):
+#     existing_os_arr = get_OS_from_HSD_JSON(HSD_no)
+    
+#     os_string = ",".join(affected_os)
+#     new_os_found = False
+    
+#     for os in affected_os:
+#         if (os not in existing_os_arr):
+#             new_os_found = True
+#             existing_os_arr.append(os)
+            
+#     print("--update os--")
+#     print("existing OS")
+#     print(existing_os_arr)
+#     print("new OS")
+#     print(affected_os)
+#     print("-------------")
+    
+#     if new_os_found == False:
+#         print ("All the OSes already exist in HSD - " + str(HSD_no))
+#         return 1
+    
+#     final_os_string =','.join(existing_os_arr)
+#     print("Adding OSes "+final_os_string)
+    
+#     headers = { 'Content-type': 'application/json' }
+ 
+#     url = build_hsd_get_url(HSD_no)
+#     code = 0
+#     affected_os_string='"server_platf_lan.feature.os_affected": "'+final_os_string+'"'
+#     payload = """
+#     {
+#       "tenant": "server_platf_lan",
+#       "subject": "feature",
+#       "fieldValues": [
+#         {
+#           """+affected_os_string+"""
+#         },
+#         {
+#           "send_mail": "false"
+#         }
+     
+#       ]
+#     }
+#     """
+#     print(payload)
+#     try:
+#         r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+#     except requests.exceptions.RequestException as e:
+#         print(e)
+#         sys.exit()
+      
+#     print("Affected_OS added "+ str(r.status_code))
+    
+#     if (r.status_code == 200):
+#         code = 1
+    
+#     return code
+
+#get device list from HSD
 def get_device_list(HSD_no):
     resp = get_HSD_link_JSON(HSD_no)
     devices_HSD_array = []
@@ -173,6 +367,7 @@ def get_device_list(HSD_no):
             devices_HSD_array.append(int(elem['id']))
     return devices_HSD_array
 
+#get the requirements from HSD-es
 def get_req_list(HSD_no):
     resp = get_HSD_link_JSON(HSD_no)
     req_HSD_array = []
@@ -182,6 +377,13 @@ def get_req_list(HSD_no):
             req_HSD_array.append(int(elem['id']))
     return req_HSD_array
 
+#get affected components from HSD-es
+def get_req_affected_component(HSD_no):
+    resp = get_HSD_JSON(HSD_no)
+    data = resp['data'][0]
+    return data['component']
+
+#add requirements to the list to HSD-es
 def add_requirements_list(HSD_no, req_list):
     req_HSD_array = get_req_list(HSD_no)
     
@@ -210,9 +412,14 @@ def add_requirements_list(HSD_no, req_list):
           "linkType": "parent-child"
     }
     """
-    response = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
     
-    if (response.status_code != 200):
+    try:
+        r = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+    
+    if (r.status_code != 200):
         print("Something went wrong")
         sys.exit()
     else:
@@ -220,6 +427,7 @@ def add_requirements_list(HSD_no, req_list):
     
     return
 
+#add the device list to HSD-es
 def add_device_list(HSD_no, affected_devices):
 
     devices_HSD_array = get_device_list(HSD_no)
@@ -244,6 +452,7 @@ def add_device_list(HSD_no, affected_devices):
     parentID_string = '"'+str(HSD_no)+'"'
       
     url = 'https://hsdes-api.intel.com/rest/relation/add'
+    
     payload = """
     {
           "parentID": """+parentID_string+""",
@@ -253,10 +462,14 @@ def add_device_list(HSD_no, affected_devices):
     """
      
     # Note the send_mail false. This will prevent HSD-ES from sending an email for this update.
-     
-    response = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
     
-    if (response.status_code != 200):
+    try:
+        r = requests.post(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+         
+    if (r.status_code != 200):
         print("Something went wrong")
         sys.exit()
     else:
@@ -271,41 +484,49 @@ def get_DCR_details_soup(DCR_no):
     
     #replacing sandbox url for testing 
     # url = 'http://sand-box-1.amr.corp.intel.com/Metrics/DCR/Details.aspx?featureID=' +str(DCR_no)
+    
     r = s.get(url, verify=False, auth=HTTPKerberosAuth())
     soup = BeautifulSoup(r.text, 'html.parser')
     html_text = soup.text
     if (html_text.find("An error has occurred") != -1):
         print("trying again...")
-        r = s.get(url, verify=False, )
+        r = s.get(url, verify=False, ) 
 
     return BeautifulSoup(r.text, 'html.parser')
 
+#returns the soup from the DCR page
 def get_DCR_viewer_soup(DCR_no):
     url = 'http://nova.amr.corp.intel.com/dcrlookup/startpage.aspx?DCR='+str(DCR_no)
-    
-    #replacing sandbox url for testing 
-    # url = 'http://sand-box-1.amr.corp.intel.com/dcrlookup/startpage.aspx?featureID=' +str(DCR_no)
+
+    try:
+        r = requests.get(url, verify=False, auth=HTTPKerberosAuth())  
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
     r = requests.get(url, verify=False, auth=HTTPKerberosAuth())   
+
     return BeautifulSoup(r.text, 'html.parser') 
 
+#get HSD link from the DCR viewer page 
 def get_HSD_link_from_DCR_viewer(DCR_no):
     soup = get_DCR_viewer_soup(DCR_no)
     mydiv = soup.find('div', id='MainContent_DCRContent')
     mydivclass = mydiv.find('div',  {"class": "divRightCell"})
     HSD_link = mydivclass.find('a')
     return HSD_link.get('href')
-    
 
-def update_summary_roc_HSD(HSD_no, input_summary, input_roc):
+#autofill summary ("description")    
+def update_summary_HSD(HSD_no, input_summary):
     headers = { 'Content-type': 'application/json' }
 
-    roc_string = description = '"'
+    description = '"'
     input_summary = BeautifulSoup(input_summary, "lxml").text
-    input_roc = BeautifulSoup(input_roc, "lxml").text
-    roc_string = roc_string + input_roc + '"'
+    # input_roc = BeautifulSoup(input_roc, "lxml").text
+    # roc_string = roc_string + input_roc + '"'
     description = description + input_summary + '"'
     
     url = build_hsd_get_url(HSD_no)
+    print(url)
     
     payload = """
     {
@@ -323,26 +544,184 @@ def update_summary_roc_HSD(HSD_no, input_summary, input_roc):
     }
     """
     print(payload)
-    response = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
-    if (response.status_code == 200):
+    
+    try:
+        r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+        
+    if (r.status_code == 200):
+        return 1
+    else:
+        print("Something went wrong here?")
+        sys.exit()
+        return 0
+    
+#autofill the reason for change on HSDes    
+def update_roc_HSD(HSD_no, input_roc):
+    headers = { 'Content-type': 'application/json' }
+
+    roc_string = '"'
+    input_roc = BeautifulSoup(input_roc, "lxml").text
+    roc_string = roc_string + input_roc + '"'
+    
+    url = build_hsd_get_url(HSD_no)
+    print(url)
+    payload = """
+    {
+      "tenant": "server_platf_lan",
+      "subject": "feature",
+      "fieldValues": [
+        {
+          "server_platf_lan.feature.reason_for_change": """+roc_string+"""
+        },
+        {
+          "send_mail": "false"
+        }
+     
+      ]
+    }
+    """
+    print(payload)
+    
+    try:
+        r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+        
+    if (r.status_code == 200):
         return 1
     else:
         print("Something went wrong here?")
         sys.exit()
         return 0
 
-def Autofill_HSD(project_os_list, project_dev_list, HSD_no):
+#replaced with two separate functions for summary and reason for change
+
+# def update_summary_roc_HSD(HSD_no, input_summary, input_roc):
+#     headers = { 'Content-type': 'application/json' }
+
+#     roc_string = description = '"'
+#     input_summary = BeautifulSoup(input_summary, "lxml").text
+#     input_roc = BeautifulSoup(input_roc, "lxml").text
+#     roc_string = roc_string + input_roc + '"'
+#     description = description + input_summary + '"'
     
-    if (add_OS_list_HSD(HSD_no, project_os_list) != 1):
-        print("Something went wrong")
-        sys.exit()
+#     url = build_hsd_get_url(HSD_no)
     
+#     payload_des = """
+#     {
+#       "tenant": "server_platf_lan",
+#       "subject": "feature",
+#       "fieldValues": [
+#         {
+#           "description": """+description+"""
+#         },
+#         {
+#           "send_mail": "false"
+#         }
+     
+#       ]
+#     }
+#     """
+#     print(payload_des)
+    
+#     try:
+#         r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload_des)
+#     except requests.exceptions.RequestException as e:
+#         print(e)
+#         sys.exit()
+        
+#     if (r.status_code == 200):
+#         return 1
+#     else:
+#         print("Something went wrong here?")
+#         sys.exit()
+#         return 0
+#     payload_roc = """
+#     {
+#       "tenant": "server_platf_lan",
+#       "subject": "feature",
+#       "fieldValues": [
+#         {
+#           "server_platf_lan.feature.reason_for_change": """+roc_string+"""
+#         },
+#         {
+#           "send_mail": "false"
+#         }
+     
+#       ]
+#     }
+#     """
+#     print(payload_roc)
+    
+#     try:
+#         r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload_roc)
+#     except requests.exceptions.RequestException as e:
+#         print(e)
+#         sys.exit()
+        
+#     if (r.status_code == 200):
+#         return 1
+#     else:
+#         print("Something went wrong here?")
+#         sys.exit()
+#         return 0
+
+#commenting because it won't be need since we are getting the affected components from DCR Details page
+
+# def Autofill_OSes(project_os_list, HSD_no):
+#     print("")
+    
+#     #
+#     # Updating DCR Requirements OS
+#     #
+    
+#     # get a list of the DCR requirements' HSD numbers
+#     req_list = get_req_list(HSD_no)
+        
+#     # for each requirement
+#     for req_HSD_no in req_list:
+        
+#         # get the minimum set
+#         affected_os = get_req_affected_os(req_HSD_no, project_os_list)
+        
+#         print("Requirement: " + str(req_HSD_no))
+#         print("Affected OS:")
+#         print(affected_os)
+        
+#         # if minimum set was sucessfully found
+#         if (affected_os != 1):
+            
+#             # update requirement
+#             update_os(req_HSD_no, affected_os)
+            
+#     #
+#     # Updating DCR OS
+#     #
+    
+#     # get the minimum set
+#     affected_os_list = get_DCR_affected_os(HSD_no, project_os_list)
+    
+#     # if minimum set was sucessfully found
+#     if (affected_os_list != 1):
+        
+#         # update the DCR with the corresponding OSes
+#         update_os(HSD_no, affected_os_list)
+        
+#     print("")
+    
+#     return
+
+def Autofill_Devices(project_dev_list, HSD_no):
     add_device_list(HSD_no, project_dev_list)
     return
 
 def Duplicate_requirements(DCR_no, target_project, HSD_no):
     DCR_no = int(input("Enter DCR # from which the requirements are to be duplicated: "))
-    if ((DCR_no < 3000) or (DCR_no > 4000)):
+    if ((DCR_no < 2000) or (DCR_no > 4000)):
         sys.exit()
     target_project_old, HSD_no_old, status = get_DCR_data(DCR_no)
     print("")
@@ -351,16 +730,18 @@ def Duplicate_requirements(DCR_no, target_project, HSD_no):
     if (int(input("Enter 1 if yes, any other key to skip")) == 1):
         summary, roc = get_summary_reason_for_change_from_HSD(HSD_no)
         old_summary, old_roc = get_summary_reason_for_change_from_HSD(HSD_no_old)
-        if 'TBD' in summary:
+        if 'TBD' or '' in summary:
             summary = old_summary
             update = True
-        if 'TBD' in roc:
+        if 'TBD' or '' in roc:
             roc = old_roc
             update = True
         print("summary="+summary)
         print("roc="+roc)
         if update is True:
-            update_summary_roc_HSD(HSD_no, summary, roc)
+            # update_summary_roc_HSD(HSD_no, summary, roc)
+            update_summary_HSD(HSD_no, summary)
+            update_roc_HSD(HSD_no, roc)
         
     new_req_list = []
     resp = get_HSD_link_JSON(HSD_no)
@@ -395,8 +776,13 @@ def Duplicate_requirements(DCR_no, target_project, HSD_no):
         # Autofil requirement HSD with OSes and link devices of the new target project
         
         #Autofill_HSD(get_OS_from_HSD_JSON(HSD_no), get_device_list(HSD_no), element)
-        print("Adding OS to requirements not supported at this stage")
-        add_device_list(HSD_no, project_device_list[target_project])
+        # print("Adding OS to requirements not supported at this stage")
+        if (target_project == 'Columbia Park SW4'):
+            add_device_list(HSD_no, project_device_list[target_project])
+            add_device_list(HSD_no, 'Columbia Park SW5')
+        else:
+            add_device_list(HSD_no, project_device_list[target_project])
+        
 
    
     if (new_req == True):
@@ -411,70 +797,292 @@ def Validate_DCR(DCR_no, target_project, HSD_no):
     
     return
 
-#Gloria's code for get DCR affected component 
-def get_DCR_affComp(DCR_no):
-    
-    soup = get_DCR_details_soup(DCR_no)
+#New code for get DCR viewer page for cloning Affected Components 
+def get_dcrClone_soup(DCR_no):
 
-    #print(soup.text)
+    url = 'http://nova.amr.corp.intel.com/Metrics/DCR/AffComp.aspx?DCR='+str(DCR_no)
+    # url = 'http://sand-box-1.amr.corp.intel.com/metrics/dcr/details.aspx?id=1&dcr='+str(DCR_no)
     
-    # print("DCR Affected Components table: "+soup.find('table', {'class': 'divRightCell'})
-    # os_affected_tbc = [] 
-    
-    # for items in soup.find('class'>'table').find_all('tr')[2:]:
-    #     data = items.find_all(['td','tr'])
-    #     try:
-    #         os_aff = data[3].text
-    #     except IndexError:pass
-    #     print(os_aff)
-    
-    
-    
-    # print("DCR lead: "+soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRLead_Value_ReadOnly").text)
-    
-    # target_project = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_TargetProjectURL").text
-    # HSD_link = soup.find("a", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DocumentLink_Value_HyperLink").text
-    # status = soup.find("span", id="ctl00_ContentPlaceHolder1_tcMain_tabOverview_DCR_Properties_DCRState_Value_ReadOnly").text
-    # if (HSD_link.find('jama') != -1):
-    #     HSD_link = get_HSD_link_from_DCR_viewer(DCR_no)
+    res = requests.get(url, verify=False, auth=HTTPKerberosAuth()).text
+    soup = BeautifulSoup(res, 'html.parser')
 
-    # print("Target project: "+target_project)
-    # print("Status: "+status)
+    return soup
 
-    # HSD_no= int(HSD_link.split("/")[-1])
-    # return target_project, HSD_no, status
-    print("DCR component added to DCR affected component list to-be-cloned")
+#New Code to get affected components for DCR
+def get_DCR_affComp(DCR_no): 
+    soup = get_dcrClone_soup(DCR_no)
+    
+    #might need these later for cloning multiple affected components
+    osAffectedList_tbc= []
+    osComponentList_tbc = []
 
+    
+    os_aff_list = []
 
+    os_comp_list = []
+   
+    #Get list of component
+    for coldata in soup.find_all('span'):
+        if str(coldata['id']).__contains__("lblComponent"):
+            os_comp_list.append(coldata.text)
+    os_comp_list = os_comp_list[:len(os_aff_list)-1]
+    print(os_comp_list)
+     
+    return os_comp_list
 
-#Gloria's code for cloning DCR
-def Clone_DCR(DCR_no, target_project, HSD_no):
-    DCR_no = int(input("Enter DCR # from which the affected components are to be cloned: "))
-    if ((DCR_no < 3000) or (DCR_no > 4000)):
+#New code to get DCR_no for DCR to be cloned - will also be used to collect multiple dcrs 
+def dcr_to_clone():
+    DCR_no_tbc = int(input("Enter DCR # from which the affected components are to be cloned: "))
+    if ((DCR_no_tbc < 3000) or (DCR_no_tbc > 4000)):
+        sys.exit()
+    print("")
+    print("Note: Only one DCR can be cloned at this time")
+    print("")
+    
+    #might be used to clone multiple dcrs 
+    
+    # print("Is this the only DCR you like to clone Affected Components?")
+    # if (int(input("Enter 1 if yes, any other key to skip ")) == 1):
+    #     # dcr_to_clone(DCR_no_tbc)
+    #     print("")
+    return DCR_no_tbc
+
+#add the affected OS list for affected components
+def get_affected_OS_list(DCR_no, HSD_no):
+    # existing_os_arr = get_OS_from_HSD_JSON(HSD_no)
+    affected_comp_array = get_DCR_affComp(DCR_no)
+    
+    #get list of affected os list for all os affected in affected component table 
+    affected_os_list = []
+    # unique_affected_os_list = {}
+    for aff_comp in affected_comp_array:
+        if (str(aff_comp).__contains__("ESX")):
+            for item in os_affected_dict["ESX"]:
+                if (item not in affected_os_list):
+                    affected_os_list.append(item)     
+        elif (str(aff_comp).__contains__("FreeBSD")):
+            for item in os_affected_dict["FreeBSD"]:
+                if (item not in affected_os_list):
+                    affected_os_list.append(item)
+        elif (str(aff_comp).__contains__("Linux")):
+            for item in os_affected_dict["Linux"]:
+                if (item not in affected_os_list):
+                    affected_os_list.append(item) 
+        elif (str(aff_comp).__contains__("NDIS")):
+            for item in os_affected_dict["NDIS"]:
+                if (item not in affected_os_list):
+                    affected_os_list.append(item)
+        else:
+            print("No Match for affected OS - Review and update OS affected list")
+    
+    print(affected_os_list)
+    return affected_os_list
+
+    
+
+#add the affected OS list to HSD-es
+def add_affected_OS_list(DCR_no, HSD_no, affected_os_list):
+    existing_os_arr = get_OS_from_HSD_JSON(HSD_no)
+    
+    os_string = ",".join(affected_os_list)
+    new_os_found = False
+    
+    for os in affected_os_list:
+        if (os not in existing_os_arr):
+            new_os_found = True
+            existing_os_arr.append(os)
+            
+    print("--update os--")
+    print("existing OS")
+    print(existing_os_arr)
+    print("new OS")
+    print(affected_os_list)
+    print("-------------")
+    
+    if new_os_found == False:
+        print ("All the OSes already exist in HSD - " + str(HSD_no))
+        return 1
+    
+    final_os_string =','.join(existing_os_arr)
+    print("Adding OSes "+final_os_string)
+   
+       
+    headers = { 'Content-type': 'application/json' }
+    
+     
+    url = build_hsd_get_url(HSD_no)
+    print(url)
+    code = 0
+    affected_os_string='"server_platf_lan.feature.os_affected": "'+final_os_string+'"'
+    
+    # final_os_string =','.join(affected_os_list)
+    
+    # print("Adding OSes "+final_os_string)
+    
+    # #add to HSD-es
+    # headers = { 'Content-type': 'application/json' }
+    # url = build_hsd_get_url(HSD_no)
+    # print(url)
+    # code = 0
+    # affected_os_string='"server_platf_lan.feature.os_affected": "'+final_os_string+'"'
+    
+    payload = """
+    {
+      "tenant": "server_platf_lan",
+      "subject": "feature",
+      "fieldValues": [
+        {
+          """+affected_os_string+"""
+        },
+        {
+          "send_mail": "false"
+        }
+     
+      ]
+    }
+    """
+    print(payload)
+    try:
+        r = requests.put(url, verify=False, auth=HTTPKerberosAuth(), headers = headers, data = payload)
+    except requests.exceptions.RequestException as e:
+        print(e)
+        sys.exit()
+      
+    print("Affected_OS added "+ str(r.status_code))
+    
+    if (r.status_code == 200):
+        code = 1
+    
+    return code
+
+#cloning one DCR from the affected component database
+def Clone_one_DCR(DCR_no_tbct):
+    
+    DCR_no_to_clone = dcr_to_clone()
+    # get_DCR_affComp_tbl(DCR_no_to_clone)
+    dcr_to_clone_from = str(DCR_no_to_clone)
+    
+    driver = webdriver.Chrome(executable_path=r"C:\Users\gkatuka\chromedr\chromedriver.exe")
+    newDCR_url = 'http://nova.amr.corp.intel.com/Metrics/DCR/AffComp.aspx?DCR='+str(DCR_no_tbct)
+    driver.get(newDCR_url)
+
+    clone_from = driver.find_element_by_id('cloneDCRAffComp')  
+    clone_from.send_keys(dcr_to_clone_from) 
+    clone_btn = driver.find_element_by_id('btnClone') 
+    clone_btn.click()
+  
+    save_comp = driver.find_element_by_id('btnSaveTop')
+    save_comp.click()
+
+    print("Would you like to keep changes?")
+    print("1. Yes, commit changes")
+    print("2. No, cancel changes")
+        
+    ip = int(input("Please select from above options: "))
+    wait=WebDriverWait(driver, 15) 
+    
+    if (ip == 1):
+         # commit_changes = driver.find_element_by_id('btnCommitChanges')
+         try:
+            wait.until(EC.element_to_be_clickable((By.ID, 'btnCommitChanges'))).click()
+            # print("DCR successfully cloned")
+            print(" ")
+            
+            # Add target_project 
+            print("Adding target project")
+            # print(target)
+            
+            target_project = str(input('Enter the project Target WW, Cycle, or Milestone: '))
+            
+            addTargetproject = driver.find_element_by_id("tbFillTarget")
+            addTargetproject.send_keys(target_project)
+            fill_btn = driver.find_element_by_id('btnFillTarget') 
+            fill_btn.click()
+            
+            # addTargetproject.send_keys(" ")
+            
+            print("Target project successfully added")
+            print("")
+         except:
+            print('error')
+         
+    elif (ip == 2):
+         # cancel_changes = driver.find_element_by_id('btnCancelChanges')
+         try:
+            wait.until(EC.element_to_be_clickable((By.ID, 'btnCancelChanges'))).click()
+            
+            print("DCR clone not completed")
+         except:
+            print('error')
+   
+    else:
+        sys.exit()
+        
+    #get HSD for the new DCR
+    target_project, newHSD_no, status = get_DCR_data(DCR_no_tbct)
+    
+    #get the os list
+    os_affected_list = get_affected_OS_list(DCR_no_tbct, newHSD_no)
+    
+    #add the os list to the HSD-es
+    add_affected_OS_list(DCR_no_tbct, newHSD_no, os_affected_list)
+  
+  
+ 
+#get affected components from multiple DCRs -wip
+
+def list_all_affComp_to_Clone(DCR_no):
+    DCR_no_tbc =  dcr_to_clone(DCR_no)
+          
+    #create list for affected components across multiple DCRs
+    affCompList_tbc = []
+    affCompList_tbc = get_DCR_affComp(DCR_no)
+    print(affCompList_tbc)
+    print("")
+            
+           
+    print("Would you like to clone Affected Components from another DCR?")
+    if (int(input("Enter 1 if yes, any other key to skip ")) == 1):
+        list_all_affComp_to_Clone(DCR_no)
+        print("")
+             
+    #add code to clone the affected os component
+            
+    print("Please review your final affected components list")
+    print(affCompList_tbc)
+    print("")
+            
+            
+    print("Are you ready to clone these affected components to your DCR?")
+    if (int(input("Enter 1 if yes, any other key to skip ")) == 1):
+        return affCompList_tbc
+    
+    
+#cloning Affected Components from multiple DCRs
+def Clone_DCR(DCR_no,target_project, HSD_no):
+       
+    list_tbc = list_all_affComp_to_Clone(DCR_no)
+    # print(list_tbc)
+    
+    newDCR_no = int(input("Enter the DCR # that you need to clone into: "))
+    if ((newDCR_no < 3000) or (newDCR_no > 4000)):
         sys.exit()
     
-    target_project_old, HSD_no_old, status = get_DCR_data(DCR_no)
-    dcr_affComp_tbc = []
-    #get dcr affected components - add to dcr_affComp_tbc
-    dcr_affComp_tbc.append(get_DCR_affComp(DCR_no))
-    print(dcr_affComp_tbc)
+    driver = webdriver.Chrome(executable_path=r"C:\Users\gkatuka\chromedr\chromedriver.exe")
+    newDCR_url = 'http://nova.amr.corp.intel.com/Metrics/DCR/AffComp.aspx?DCR='+str(newDCR_no)
+    driver.get(newDCR_url)
     
+    dropdown =Select(driver.find_element_by_id('ddlCustomizeView')) 
+
+    dropdown.select_by_visible_text("Both")
     
-    print("")
-   # update = False
+    html = driver.page_source
+    # print(html)
     
-    #create list for affected components across multiple DCRs
+    soup = BeautifulSoup(html, 'html.parser')
+    # print(soup)
     
-    #add code to clone the affected os component
-    
-    print("Would you also like clone these os components")
-    if (int(input("Enter 1 if yes, any other key to skip")) == 1):
-        #clone the affected components for th DCR and add to a list
-        #recursion until entry is not 1
-        
-        #Clone_DCR(DCR_no, target_project, HSD_no)
-        print("Cloning DCR")
-        #print("Cloning DCR" + DCR_no)
+    print("DCR successfully cloned")
 
 def main():
     
@@ -485,14 +1093,34 @@ def main():
     DCR_no = int(input("Enter the DCR #: "))
     if ((DCR_no < 3000) or (DCR_no > 4000)):
         sys.exit()
-        
+     
+      
+    
     print("..........................")
     
     target_project, HSD_no, status = get_DCR_data(DCR_no)
-
+    
+    #testing
+    # print("DCR no is: {} ".format(DCR_no))
+    # print("HSD no is: {} ".format(HSD_no))
+    # update_summary_HSD(HSD_no, "This is an example input summary")
+    
+    # add_affected_OS_list(DCR_no, HSD_no, os_affected_string)
+    
     if "approved" in status.lower():
+
         print(bcolors.WARNING +"ERROR:"+ bcolors.ENDC)
+
+        print("\n" + bcolors.WARNING +"ERROR:"+ bcolors.ENDC)
         print("DCR Parser tool cannot be used for Approved DCRs")
+        print("Exiting...")
+        sys.exit()
+
+
+    if "backlog" in target_project.lower():
+        print("\n" + bcolors.WARNING +"ERROR:"+ bcolors.ENDC)
+        print("DCR Parser tool cannot be used for DCRs in Backlog")
+        print("Exiting...")
         sys.exit()
         
     print("This tool is recommended for DCR leads to use on their \033[4mOWN\033[0m DCRs or for \033[4mDCR APPROVAL\033[0m")
@@ -501,26 +1129,33 @@ def main():
         print("THANK YOU for using DCR Parser!!!")
         sys.exit()
         
-        
+       
     while(1):
         print("What would like to do")
-        print("1. Autofill supported OSes and device based on target project")
-        print("2. Duplicate requirements from another DCR")
-        print("3. Syntax check on the DCR for approval")
-        print("4. Clone the Affected Component")
-        print("5. Exit")
+
+        print("1. Autofill supported OSes based on target project")
+        print("2. Autofill supported devices based on target project")
+        print("3. Duplicate requirements from another DCR")
+        print("4. Syntax check on the DCR for approval")
+        print("5. Clone the Affected Component")
+        print("6. Exit")
+
         
         ip = int(input("Please select from above options: "))
         
         if (ip == 1):
-            Autofill_HSD(project_os_dict[target_project], project_device_list[target_project], HSD_no)
+            # Autofill_OSes(project_os_dict[target_project], HSD_no)
+            pass
         elif (ip == 2):
-            Duplicate_requirements(DCR_no,target_project, HSD_no)
+            Autofill_Devices(project_device_list[target_project], HSD_no)
         elif (ip == 3):
-            Validate_DCR(DCR_no, target_project, HSD_no)
+            Duplicate_requirements(DCR_no,target_project, HSD_no)
         elif (ip == 4):
-            print("cloning DCR...")
-            Clone_DCR(DCR_no, target_project, HSD_no)
+            Validate_DCR(DCR_no, target_project, HSD_no)
+        elif (ip == 5):
+            # Clone_DCR(DCR_no, target_project, HSD_no)
+            Clone_one_DCR(DCR_no)
+
         else:
             sys.exit()
             
